@@ -19,12 +19,23 @@ struct packet_ptr {
     struct tcphdr *tcph;
 };
 
-struct packet_nonptr {
+struct packet_nonptr_rst {
     struct ether_header ep;
     struct ip iph;
     struct tcphdr tcph;
-    //char tcpdata[5]= "aaaa";
+    char tcp_data[11] = "blocked!!!";
 };
+
+struct packet_nonptr_fin {
+    struct ether_header ep;
+    struct ip iph;
+    struct tcphdr tcph;
+    char tcp_data[11] = "blocked!!!";
+};
+
+
+
+
 #pragma pack(pop)
 
 struct packet_ptr org_packet;
@@ -36,10 +47,9 @@ void usage() {
 }
 
 
-void send_packet(pcap_t* handle, char* dev, bool forward, int tcpdata_len){
-    struct packet_nonptr block_packet;
-
-    printf("tcp data len : %d \n",tcpdata_len);
+void send_packet(pcap_t* handle, char* dev, int tcpdata_len){
+    struct packet_nonptr_rst block_packet_rst;
+    struct packet_nonptr_fin block_packet_fin;
 
     int sockfd, ret;
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -52,99 +62,148 @@ void send_packet(pcap_t* handle, char* dev, bool forward, int tcpdata_len){
     struct ifreq ifr;
     strncpy(ifr.ifr_name, dev, IFNAMSIZ);
     ret = ioctl(sockfd, SIOCGIFHWADDR, &ifr);
-    memcpy(block_packet.ep.ether_shost, ifr.ifr_hwaddr.sa_data, 6);
+    memcpy(block_packet_rst.ep.ether_shost, ifr.ifr_hwaddr.sa_data, 6);
+    memcpy(block_packet_fin.ep.ether_shost, ifr.ifr_hwaddr.sa_data, 6);
     // my mac
 
-    block_packet.ep.ether_type = htons(ETHERTYPE_IP);
-    block_packet.tcph.th_off = 5;
-    block_packet.tcph.rst = 1;
-    block_packet.tcph.ack = 1;
-    block_packet.tcph.syn = 0;
-    block_packet.tcph.th_urp = 0;
+    block_packet_rst.ep.ether_type = htons(ETHERTYPE_IP);
+    block_packet_rst.tcph.th_off = 5;
+    block_packet_rst.tcph.ack = 1;
+    block_packet_rst.tcph.syn = 0;
+    block_packet_rst.tcph.th_urp = 0;
+    block_packet_rst.iph.ip_hl = 5;// htons -> reverse
+    block_packet_rst.iph.ip_v = 4; // htons -> reverse
+    block_packet_rst.iph.ip_p = IPPROTO_TCP;
+    block_packet_rst.iph.ip_off = 0;
 
-    block_packet.iph.ip_hl = 5;
-    block_packet.iph.ip_v = 4;
-    // htons -> reverse
-    block_packet.iph.ip_p = IPPROTO_TCP;
-    block_packet.iph.ip_off = 0;
+    block_packet_fin.ep.ether_type = htons(ETHERTYPE_IP);
+    block_packet_fin.tcph.th_off = 5;
+    block_packet_fin.tcph.ack = 1;
+    block_packet_fin.tcph.syn = 0;
+    block_packet_fin.tcph.th_urp = 0;
+    block_packet_fin.iph.ip_hl = 5;// htons -> reverse
+    block_packet_fin.iph.ip_v = 4; // htons -> reverse
+    block_packet_fin.iph.ip_p = IPPROTO_TCP;
+    block_packet_fin.iph.ip_off = 0;
+    block_packet_fin.tcp_data[10] = 0x0a;
 
-    if (forward == true){
-        memcpy(block_packet.ep.ether_dhost, org_packet.ep->ether_dhost, 6);
+        memcpy(block_packet_rst.ep.ether_dhost, org_packet.ep->ether_dhost, 6);
         // ep
-        block_packet.iph.ip_len = htons((int)(sizeof(struct ip) + sizeof (struct tcphdr)));
-        block_packet.iph.ip_ttl = org_packet.iph->ip_ttl;
-        block_packet.iph.ip_dst = org_packet.iph->ip_dst;
-        block_packet.iph.ip_src = org_packet.iph->ip_src;
+        block_packet_rst.iph.ip_len = htons((int)(sizeof(struct ip) + sizeof (struct tcphdr)));
+        block_packet_rst.iph.ip_ttl = org_packet.iph->ip_ttl;
+        block_packet_rst.iph.ip_dst = org_packet.iph->ip_dst;
+        block_packet_rst.iph.ip_src = org_packet.iph->ip_src;
         // iph
-        block_packet.tcph.th_sport = org_packet.tcph->th_sport;
-        block_packet.tcph.th_dport = org_packet.tcph->th_dport;
-        block_packet.tcph.th_seq = htonl(ntohl(org_packet.tcph->th_seq) + tcpdata_len);
-        block_packet.tcph.th_ack = org_packet.tcph->th_ack;
+        block_packet_rst.tcph.th_sport = org_packet.tcph->th_sport;
+        block_packet_rst.tcph.th_dport = org_packet.tcph->th_dport;
+        block_packet_rst.tcph.th_seq = htonl(ntohl(org_packet.tcph->th_seq) + tcpdata_len);
+        block_packet_rst.tcph.th_ack = org_packet.tcph->th_ack;
+        block_packet_rst.tcph.rst = 1;
         // tcph
-    } else {
-        memcpy(block_packet.ep.ether_dhost, org_packet.ep->ether_shost, 6);
+        memcpy(block_packet_fin.ep.ether_dhost, org_packet.ep->ether_shost, 6);
         //ep
-        block_packet.iph.ip_len = htons((int)(sizeof(struct ip) + sizeof (struct tcphdr)));//sizeof(block_packet.iph) + sizeof (block_packet.tcph) + sizeof (msg);
-        block_packet.iph.ip_ttl = 128;
-        block_packet.iph.ip_dst = org_packet.iph->ip_src;
-        block_packet.iph.ip_src = org_packet.iph->ip_dst;
+        block_packet_fin.iph.ip_len = htons((int)(sizeof(struct ip) + sizeof(struct tcphdr)) + sizeof(block_packet_rst.tcp_data));
+        block_packet_fin.iph.ip_ttl = 128;
+        block_packet_fin.iph.ip_dst = org_packet.iph->ip_src;
+        block_packet_fin.iph.ip_src = org_packet.iph->ip_dst;
         // iph
-        block_packet.tcph.th_sport = org_packet.tcph->th_dport;
-        block_packet.tcph.th_dport = org_packet.tcph->th_sport;
-        block_packet.tcph.th_seq = org_packet.tcph->th_ack;
-        block_packet.tcph.th_ack = htonl(ntohl(org_packet.tcph->th_seq) + tcpdata_len);
+        block_packet_fin.tcph.th_sport = org_packet.tcph->th_dport;
+        block_packet_fin.tcph.th_dport = org_packet.tcph->th_sport;
+        block_packet_fin.tcph.th_seq = org_packet.tcph->th_ack;
+        block_packet_fin.tcph.th_ack = htonl(ntohl(org_packet.tcph->th_seq) + tcpdata_len);
+        block_packet_fin.tcph.fin = 1;
         // tcph
-    }
-
 
 
     u_int16_t temp_chksum=0;
     u_int64_t sum_chksum=0;
 
     temp_chksum = 0x45 << 8; // block_packet.iph.ip_hl & block_packet.iph.ip_v
-    temp_chksum += block_packet.iph.ip_tos;
+    temp_chksum += block_packet_rst.iph.ip_tos;
     sum_chksum += temp_chksum;
-    sum_chksum += ntohs(block_packet.iph.ip_len);
-    sum_chksum += ntohs(block_packet.iph.ip_id);
-    sum_chksum += ntohs(block_packet.iph.ip_off);
-    temp_chksum = block_packet.iph.ip_ttl << 8;
-    temp_chksum += block_packet.iph.ip_p;
+    sum_chksum += ntohs(block_packet_rst.iph.ip_len);
+    sum_chksum += ntohs(block_packet_rst.iph.ip_id);
+    sum_chksum += ntohs(block_packet_rst.iph.ip_off);
+    temp_chksum = block_packet_rst.iph.ip_ttl << 8;
+    temp_chksum += block_packet_rst.iph.ip_p;
     sum_chksum += temp_chksum;
-    sum_chksum += ntohl(block_packet.iph.ip_src.s_addr) >> 16;
-    sum_chksum += ntohl(block_packet.iph.ip_src.s_addr) << 16 >> 16;
-    sum_chksum += ntohl(block_packet.iph.ip_dst.s_addr) >> 16;
-    sum_chksum += ntohl(block_packet.iph.ip_dst.s_addr) << 16 >> 16;
+    sum_chksum += ntohl(block_packet_rst.iph.ip_src.s_addr) >> 16;
+    sum_chksum += ntohl(block_packet_rst.iph.ip_src.s_addr) << 16 >> 16;
+    sum_chksum += ntohl(block_packet_rst.iph.ip_dst.s_addr) >> 16;
+    sum_chksum += ntohl(block_packet_rst.iph.ip_dst.s_addr) << 16 >> 16;
     sum_chksum = (sum_chksum >> 16) + (sum_chksum & 0xffff);
-    block_packet.iph.ip_sum = htons(sum_chksum ^ 0xffff);
+    block_packet_rst.iph.ip_sum = htons(sum_chksum ^ 0xffff);
     // ipv4 hdr checksum
 
     sum_chksum = 0;
-    sum_chksum += ntohl(block_packet.iph.ip_src.s_addr) >> 16;
-    sum_chksum += ntohl(block_packet.iph.ip_src.s_addr) << 16 >> 16;
-    sum_chksum += ntohl(block_packet.iph.ip_dst.s_addr) >> 16;
-    sum_chksum += ntohl(block_packet.iph.ip_dst.s_addr) << 16 >> 16;
-    sum_chksum += block_packet.iph.ip_p;
-    sum_chksum += sizeof (struct tcphdr);
-    temp_chksum = (sum_chksum >> 16) + (sum_chksum & 0xffff);
+    temp_chksum = 0x45 << 8; // block_packet.iph.ip_hl & block_packet.iph.ip_v
+    temp_chksum += block_packet_fin.iph.ip_tos;
+    sum_chksum += temp_chksum;
+    sum_chksum += ntohs(block_packet_fin.iph.ip_len);
+    sum_chksum += ntohs(block_packet_fin.iph.ip_id);
+    sum_chksum += ntohs(block_packet_fin.iph.ip_off);
+    temp_chksum = block_packet_fin.iph.ip_ttl << 8;
+    temp_chksum += block_packet_fin.iph.ip_p;
+    sum_chksum += temp_chksum;
+    sum_chksum += ntohl(block_packet_fin.iph.ip_src.s_addr) >> 16;
+    sum_chksum += ntohl(block_packet_fin.iph.ip_src.s_addr) << 16 >> 16;
+    sum_chksum += ntohl(block_packet_fin.iph.ip_dst.s_addr) >> 16;
+    sum_chksum += ntohl(block_packet_fin.iph.ip_dst.s_addr) << 16 >> 16;
+    sum_chksum = (sum_chksum >> 16) + (sum_chksum & 0xffff);
+    block_packet_fin.iph.ip_sum = htons(sum_chksum ^ 0xffff);
+    // ipv4 hdr checksum
 
     sum_chksum = 0;
-    sum_chksum += ntohs(block_packet.tcph.th_sport);
-    sum_chksum += ntohs(block_packet.tcph.th_dport);
-    sum_chksum += ntohl(block_packet.tcph.th_seq) >> 16;
-    sum_chksum += ntohl(block_packet.tcph.th_seq) << 16 >> 16;
-    sum_chksum += ntohl(block_packet.tcph.th_ack) >> 16;
-    sum_chksum += ntohl(block_packet.tcph.th_ack) << 16 >> 16;
-    sum_chksum += (block_packet.tcph.th_off << 12) + block_packet.tcph.th_flags;
-    sum_chksum += ntohs(block_packet.tcph.th_win);
-    sum_chksum = (sum_chksum >> 16) + (sum_chksum & 0xffff);
-
+    sum_chksum += ntohl(block_packet_rst.iph.ip_src.s_addr) >> 16;
+    sum_chksum += ntohl(block_packet_rst.iph.ip_src.s_addr) << 16 >> 16;
+    sum_chksum += ntohl(block_packet_rst.iph.ip_dst.s_addr) >> 16;
+    sum_chksum += ntohl(block_packet_rst.iph.ip_dst.s_addr) << 16 >> 16;
+    sum_chksum += block_packet_rst.iph.ip_p;
+    sum_chksum += sizeof (struct tcphdr);
+    temp_chksum = (sum_chksum >> 16) + (sum_chksum & 0xffff); // ip pseudo header checksum
+    sum_chksum = 0;
+    sum_chksum += ntohs(block_packet_rst.tcph.th_sport);
+    sum_chksum += ntohs(block_packet_rst.tcph.th_dport);
+    sum_chksum += ntohl(block_packet_rst.tcph.th_seq) >> 16;
+    sum_chksum += ntohl(block_packet_rst.tcph.th_seq) << 16 >> 16;
+    sum_chksum += ntohl(block_packet_rst.tcph.th_ack) >> 16;
+    sum_chksum += ntohl(block_packet_rst.tcph.th_ack) << 16 >> 16;
+    sum_chksum += (block_packet_rst.tcph.th_off << 12) + block_packet_rst.tcph.th_flags;
+    sum_chksum += ntohs(block_packet_rst.tcph.th_win);
+    sum_chksum = (sum_chksum >> 16) + (sum_chksum & 0xffff); // tcp header checksum
     sum_chksum += temp_chksum;
     sum_chksum = (sum_chksum >> 16) + (sum_chksum & 0xffff);
-    block_packet.tcph.th_sum = htons(sum_chksum ^ 0xffff);
-    printf("0x%x \n",block_packet.tcph.th_sum);
+    block_packet_rst.tcph.th_sum = htons(sum_chksum ^ 0xffff); // mix
 
+    sum_chksum = 0;
+    sum_chksum += ntohl(block_packet_fin.iph.ip_src.s_addr) >> 16;
+    sum_chksum += ntohl(block_packet_fin.iph.ip_src.s_addr) << 16 >> 16;
+    sum_chksum += ntohl(block_packet_fin.iph.ip_dst.s_addr) >> 16;
+    sum_chksum += ntohl(block_packet_fin.iph.ip_dst.s_addr) << 16 >> 16;
+    sum_chksum += block_packet_fin.iph.ip_p;
+    sum_chksum += sizeof (struct tcphdr) + 11;
+    temp_chksum = (sum_chksum >> 16) + (sum_chksum & 0xffff); // ip pseudo header checksum
+    sum_chksum = 0;
+    sum_chksum += ntohs(block_packet_fin.tcph.th_sport);
+    sum_chksum += ntohs(block_packet_fin.tcph.th_dport);
+    sum_chksum += ntohl(block_packet_fin.tcph.th_seq) >> 16;
+    sum_chksum += ntohl(block_packet_fin.tcph.th_seq) << 16 >> 16;
+    sum_chksum += ntohl(block_packet_fin.tcph.th_ack) >> 16;
+    sum_chksum += ntohl(block_packet_fin.tcph.th_ack) << 16 >> 16;
+    sum_chksum += (block_packet_fin.tcph.th_off << 12) + block_packet_fin.tcph.th_flags;
+    sum_chksum += ntohs(block_packet_fin.tcph.th_win);
+    sum_chksum += 0xCC77;//0xC281; // TCP data
+    sum_chksum = (sum_chksum >> 16) + (sum_chksum & 0xffff); // tcp header checksum
+    sum_chksum += temp_chksum;
+    sum_chksum = (sum_chksum >> 16) + (sum_chksum & 0xffff);
+    block_packet_fin.tcph.th_sum = htons(sum_chksum ^ 0xffff); // mix
 
-    if (pcap_sendpacket(handle, (unsigned char*)&block_packet, sizeof(block_packet)) != 0){
+    if (pcap_sendpacket(handle, (unsigned char*)&block_packet_fin, sizeof(block_packet_fin)) != 0){
+        printf("Packet Send Fail..\n");
+        exit (-1);
+        // 패킷을 보냄
+    }
+    if (pcap_sendpacket(handle, (unsigned char*)&block_packet_rst, sizeof(block_packet_rst)) != 0){
         printf("Packet Send Fail..\n");
         exit (-1);
         // 패킷을 보냄
@@ -207,8 +266,7 @@ int main(int argc, char* argv[]) {
                         sum = sum+1;
 
                         if (strlen(rule) == sum){
-                            send_packet(pcap_handle, dev, false, payload_len);
-                            send_packet(pcap_handle, dev, true, payload_len);
+                            send_packet(pcap_handle, dev, payload_len);
                             printf("\n****************** Found !!!\n");
 
                         }
